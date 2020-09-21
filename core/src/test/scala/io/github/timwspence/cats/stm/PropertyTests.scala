@@ -4,8 +4,6 @@ import cats.implicits._
 
 import cats.effect.IO
 
-//TODO replace this with ScalaCheckEffectSuite and remove the `.check()`
-//once it is released
 import munit.{CatsEffectSuite, ScalaCheckEffectSuite}
 
 import org.scalacheck.effect.PropF

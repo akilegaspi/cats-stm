@@ -132,6 +132,7 @@ object STM {
             retryFiber = RetryFiber.make(stm, defer)
             txId       = IdGen.incrementAndGet()
             _   <- F.delay(log.registerRetry(txId, retryFiber))
+            //TODO onCancel cancel/remove retry fiber
             e   <- defer.get
             res <- e.fold(F.raiseError(_), F.pure(_))
           } yield res
