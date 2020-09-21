@@ -41,13 +41,13 @@ class TVarTest extends CatsEffectSuite {
     val tvar = TVar.of(0).atomically[IO].unsafeRunSync
 
     val prog: IO[(Int, Int)] = for {
-      fiber     <- (for {
-        current <- tvar.get
-        _ <- STM.check(current > 0)
-      } yield current).atomically[IO].start
+      fiber <- (for {
+          current <- tvar.get
+          _       <- STM.check(current > 0)
+        } yield current).atomically[IO].start
       _ <- IO.sleep(1 second)
       pending = tvar.pending.get.size
-      _ <- tvar.set(2).atomically[IO]
+      _   <- tvar.set(2).atomically[IO]
       res <- fiber.join
     } yield (pending, res)
 
@@ -62,10 +62,10 @@ class TVarTest extends CatsEffectSuite {
     val tvar = TVar.of(0).atomically[IO].unsafeRunSync
 
     val prog: IO[(Int, Int, Int)] = for {
-      fiber     <- (for {
-        current <- tvar.get
-        _ <- STM.check(current > 1)
-      } yield current).atomically[IO].start
+      fiber <- (for {
+          current <- tvar.get
+          _       <- STM.check(current > 1)
+        } yield current).atomically[IO].start
       _ <- IO.sleep(1 second)
       pending = tvar.pending.get.size
       _ <- tvar.set(1).atomically[IO]
@@ -89,10 +89,10 @@ class TVarTest extends CatsEffectSuite {
     val tvar = TVar.of(0).atomically[IO].unsafeRunSync
 
     val prog: IO[(Int, Int)] = for {
-      fiber     <- (for {
-        current <- tvar.get
-        _ <- STM.check(current > 0)
-      } yield current).atomically[IO].start
+      fiber <- (for {
+          current <- tvar.get
+          _       <- STM.check(current > 0)
+        } yield current).atomically[IO].start
       _ <- IO.sleep(1 second)
       pending = tvar.pending.get.size
       _ <- tvar.set(2).atomically[IO]

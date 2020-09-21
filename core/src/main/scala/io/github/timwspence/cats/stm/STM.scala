@@ -222,8 +222,8 @@ object STM {
           case Bind(stm, f) =>
             conts = f :: conts
             go(stm)
-          case Get(tvar)                 => go(Pure(log.get(tvar)))
-          case Modify(tvar, f)           => go(Pure(log.modify(tvar.asInstanceOf[TVar[Any]], f)))
+          case Get(tvar)       => go(Pure(log.get(tvar)))
+          case Modify(tvar, f) => go(Pure(log.modify(tvar.asInstanceOf[TVar[Any]], f)))
           case OrElse(attempt, fallback) =>
             fallbacks = (fallback, log.snapshot(), conts) :: fallbacks
             go(attempt)
@@ -267,24 +267,24 @@ object STM {
 
       def snapshot(): TLog = TLog(Map.from(map.view.mapValues(_.snapshot())))
 
-      def delta(tlog: TLog): TLog = TLog(
-        Map.from(
-          map.foldLeft(tlog.map.view.mapValues(_.snapshot()).toMap) { (acc, p) =>
-            val (id, e) = p
-            val entry = TLogEntry(e.tvar, e.tvar.value)
-            if (acc.contains(id)) acc else acc + (id -> entry)
-          }
+      def delta(tlog: TLog): TLog =
+        TLog(
+          Map.from(
+            map.foldLeft(tlog.map.view.mapValues(_.snapshot()).toMap) { (acc, p) =>
+              val (id, e) = p
+              val entry   = TLogEntry(e.tvar, e.tvar.value)
+              if (acc.contains(id)) acc else acc + (id -> entry)
+            }
+          )
         )
-      )
 
       def commit(): Unit = values.foreach(_.commit())
 
       def registerRetry(txId: TxId, fiber: RetryFiber): Unit =
-        values.foreach { e => {
+        values.foreach { e =>
           println(s"Registering txn $txId with tvar ${e.tvar.id}")
           e.tvar.pending
             .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
-                        }
         }
 
       def collectPending(): List[RetryFiber] = {
@@ -308,7 +308,7 @@ object STM {
 
     type Cont = Any => STM[Any]
 
-    type TxId = Long
+    type TxId   = Long
     type TVarId = Long
 
     //TVar is invariant (mutable) so we can't just deal with TVar[Any]
