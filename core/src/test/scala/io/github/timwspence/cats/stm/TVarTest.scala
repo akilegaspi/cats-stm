@@ -138,4 +138,24 @@ class TVarTest extends CatsEffectSuite {
       assert(tvar.pending.get.isEmpty)
     }
   }
+
+  test("TVar.of is referentially transparent") {
+    val t: STM[TVar[Int]] = TVar.of(0)
+
+    val prog = for {
+      t1 <- t.atomically[IO]
+      t2 <- t.atomically[IO]
+      _ <- (for {
+        _ <- t1.modify(_ + 1)
+        _ <- t2.modify(_ + 2)
+      } yield ()).atomically[IO]
+      v1 <- t1.get.atomically[IO]
+      v2 <- t2.get.atomically[IO]
+    } yield (v1 -> v2)
+
+    prog.map { res =>
+      assertEquals(res._1, 1)
+      assertEquals(res._2, 2)
+    }
+  }
 }

@@ -8,7 +8,7 @@ import scala.concurrent.duration._
 object SantaClausProblem extends IOApp {
 
   override def run(args: List[String]): IO[ExitCode] =
-    mainProblem.timeout(5.seconds).as(ExitCode.Success)
+    (mainProblem.timeout(20.seconds).attempt >> IO(println(STM.debug.get()))).as(ExitCode.Success)
 
   def meetInStudy(id: Int): IO[Unit] = IO(println(show"Elf $id meeting in the study"))
 
@@ -135,10 +135,10 @@ object SantaClausProblem extends IOApp {
 
   def mainProblem: IO[Unit] =
     for {
-      elfGroup  <- Group.of(3)
-      _         <- List(1, 2, 3, 4, 5, 6, 7, 8, 9, 10).traverse_(n => elf(elfGroup, n))
-      reinGroup <- Group.of(9)
-      _         <- List(1, 2, 3, 4, 5, 6, 7, 8, 9).traverse_(n => reindeer(reinGroup, n))
+      elfGroup  <- Group.of(1)
+      _         <- List(1).traverse_(n => elf(elfGroup, n))
+      reinGroup <- Group.of(1)
+      _         <- List(1).traverse_(n => reindeer(reinGroup, n))
       _         <- santa(elfGroup, reinGroup).foreverM.void
     } yield ()
 

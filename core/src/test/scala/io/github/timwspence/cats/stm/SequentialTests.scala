@@ -102,6 +102,7 @@ class SequentialTests extends CatsEffectSuite {
     for (_ <- prog) yield assertEquals(account.value, 50)
   }
 
+
   test("OrElse reverts changes if retrying") {
     val account = TVar.of(100).atomically[IO].unsafeRunSync
 
@@ -112,12 +113,16 @@ class SequentialTests extends CatsEffectSuite {
 
     val second = for {
       balance <- account.get
-      _       <- STM.check(balance > 50)
+      _       <- STM.check({println(s"balance is $balance"); balance > 50})
       _       <- account.modify(_ - 50)
     } yield ()
 
+    println("foo")
+
     val prog = for {
+      _ <- IO(println("#######################################"))
       _ <- first.orElse(second).atomically[IO]
+      _ <- IO(println("#######################################"))
     } yield ()
 
     for (_ <- prog) yield assertEquals(account.value, 50)

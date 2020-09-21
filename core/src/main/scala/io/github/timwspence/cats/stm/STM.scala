@@ -12,6 +12,7 @@ import scala.annotation.tailrec
 import scala.compat.java8.FunctionConverters._
 
 import io.github.timwspence.cats.stm.STM.internal._
+import java.util.concurrent.atomic.AtomicReference
 
 /**
   * Monad representing transactions involving one or more
@@ -45,6 +46,8 @@ sealed abstract class STM[+A] {
 }
 
 object STM {
+
+  val debug: AtomicReference[Map[TxId, Set[TVarId]]] = new AtomicReference(Map.empty)
 
   /**
     * Commit the `STM` action as an `IO` action. The mutable
@@ -104,7 +107,10 @@ object STM {
     new Monoid[STM[A]] {
       override def empty: STM[A] = STM.pure(M.empty)
 
-      override def combine(x: STM[A], y: STM[A]): STM[A] = ???
+      override def combine(x: STM[A], y: STM[A]): STM[A] = for {
+        l <- x
+        r <- y
+      } yield M.combine(l, r)
     }
 
   final class AtomicallyPartiallyApplied[F[_]] {
@@ -127,9 +133,11 @@ object STM {
         case TFailure(e) => F.raiseError(e)
         case TRetry =>
           for {
+            txId <- F.delay(IdGen.incrementAndGet())
             defer <- Deferred[F, Either[Throwable, A]]
-            retryFiber = RetryFiber.make(stm, defer)
-            txId       = IdGen.incrementAndGet()
+            retryFiber = RetryFiber.make(stm, txId, defer)
+            //TODO keep the same id every retry so we can do cancellation
+            //should be fine as we remove from the map every time
             _ <- F.delay(log.registerRetry(txId, retryFiber))
             //TODO onCancel cancel/remove retry fiber
             e   <- defer.get
@@ -146,6 +154,7 @@ object STM {
     val IdGen = new AtomicLong()
 
     final case class Pure[A](a: A)                                extends STM[A]
+    final case class Alloc[A](a: A)                               extends STM[TVar[A]]
     final case class Bind[A, B](stm: STM[B], f: B => STM[A])      extends STM[A]
     final case class Get[A](tvar: TVar[A])                        extends STM[A]
     final case class Modify[A](tvar: TVar[A], f: A => A)          extends STM[Unit]
@@ -165,17 +174,24 @@ object STM {
 
       val defer: Deferred[Effect, Either[Throwable, Result]]
       val stm: STM[Result]
+      val txId: TxId
       implicit def F: Concurrent[Effect]
 
       def run: Effect[Unit] = {
         val (r, log) = eval(stm)
-        println(s"retrying: $r")
+        println(s"retrying $txId: $r")
+        if (debug.get().contains(txId)) {
+          debug.updateAndGet(m => m - txId)
+        } else {
+          println(s"ERROR: $txId not removed")
+        }
         r match {
           case TSuccess(res) =>
             var commit = false
             STM.synchronized {
               if (!log.isDirty) {
                 commit = true
+                println(s"Committing from retry $txId")
                 log.commit()
               }
             }
@@ -183,7 +199,7 @@ object STM {
               log.collectPending().traverse_(_.run.asInstanceOf[Effect[Unit]].start) >> defer.complete(Right(res))
             else run
           case TFailure(e) => defer.complete(Left(e))
-          case TRetry      => F.delay(log.registerRetry(IdGen.incrementAndGet(), this))
+          case TRetry      => F.delay(log.registerRetry(txId, this))
         }
       }
     }
@@ -191,7 +207,7 @@ object STM {
     object RetryFiber {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
-      def make[F[_], A](stm0: STM[A], defer0: Deferred[F, Either[Throwable, A]])(implicit
+      def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(implicit
         F0: Concurrent[F]
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
@@ -200,6 +216,7 @@ object STM {
 
           val defer: Deferred[F, Either[Throwable, A]] = defer0
           val stm: STM[A]                              = stm0
+          val txId                                     = txId0
           implicit def F: Concurrent[F]                = F0
         }
     }
@@ -213,12 +230,25 @@ object STM {
       def go(stm: STM[Any]): TResult[Any] =
         stm match {
           case Pure(a) =>
-            if (conts.isEmpty) TSuccess(a)
+            if (conts.isEmpty) {
+              println("Succeeded")
+              if(a.isInstanceOf[TVar[_]]) {
+                val x = a.asInstanceOf[TVar[Object]]
+                val m = TVar.tvarDebug.get()
+                if (m.contains(x.id)) {
+                  println("BOOM!!!!!!!!!!!!!!!!!!!!!!!!!")
+                } else {
+                  TVar.tvarDebug.updateAndGet(m => m + x.id)
+                }
+              }
+              TSuccess(a)
+            }
             else {
               val f = conts.head
               conts = conts.tail
               go(f(a))
             }
+          case Alloc(a) => go(Pure((new TVar(IdGen.incrementAndGet(), a, new AtomicReference(Map())))))
           case Bind(stm, f) =>
             conts = f :: conts
             go(stm)
@@ -226,16 +256,21 @@ object STM {
           case Modify(tvar, f) => go(Pure(log.modify(tvar.asInstanceOf[TVar[Any]], f)))
           case OrElse(attempt, fallback) =>
             fallbacks = (fallback, log.snapshot(), conts) :: fallbacks
+            println(log.values)
+            println("attempting")
             go(attempt)
           case Abort(error) =>
             TFailure(error)
           case Retry =>
+            println("retrying")
             if (fallbacks.isEmpty) TRetry
             else {
+              println("Using fallback")
               val (fb, lg, cts) = fallbacks.head
               log = log.delta(lg)
               conts = cts
               fallbacks = fallbacks.tail
+              println(log.values.map(e => s"Current: ${e.current} Initial: ${e.initial}"))
               go(fb)
             }
         }
@@ -260,32 +295,36 @@ object STM {
         val current = get(tvar)
         val entry   = map(tvar.id)
         entry.unsafeSet(f(current))
-        ()
       }
 
       def isDirty: Boolean = values.exists(_.isDirty)
 
       def snapshot(): TLog = TLog(Map.from(map.view.mapValues(_.snapshot())))
 
-      def delta(tlog: TLog): TLog =
+      def delta(tlog: TLog): TLog = {
+        println(tlog.values.map(e => s"Delta base Current: ${e.current} Initial: ${e.initial}"))
+        println(values.map(e => s"Delta diff Current: ${e.current} Initial: ${e.initial}"))
         TLog(
           Map.from(
             map.foldLeft(tlog.map.view.mapValues(_.snapshot()).toMap) { (acc, p) =>
               val (id, e) = p
-              val entry   = TLogEntry(e.tvar, e.tvar.value)
-              if (acc.contains(id)) acc else acc + (id -> entry)
+              if (acc.contains(id)) acc else acc + (id -> TLogEntry(e.tvar, e.tvar.value))
             }
           )
         )
+      }
 
       def commit(): Unit = values.foreach(_.commit())
 
-      def registerRetry(txId: TxId, fiber: RetryFiber): Unit =
+      def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
+        debug.updateAndGet(m => m + (txId -> values.map(_.tvar.id).toSet))
         values.foreach { e =>
           println(s"Registering txn $txId with tvar ${e.tvar.id}")
           e.tvar.pending
+          //TODO is this necessary now 2.11 support is gone?
             .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
         }
+      }
 
       def collectPending(): List[RetryFiber] = {
         var pending: Map[TxId, RetryFiber] = Map.empty

@@ -38,6 +38,9 @@ final class TVar[A] private[stm] (
 
 object TVar {
 
-  def of[A](value: A): STM[TVar[A]] = Pure(new TVar(IdGen.incrementAndGet(), value, new AtomicReference(Map())))
+  def of[A](value: A): STM[TVar[A]] = Alloc(value)
+    // Pure(new TVar(IdGen.incrementAndGet(), value, new AtomicReference(Map())))
+
+  val tvarDebug: AtomicReference[Set[Long]] = new AtomicReference(Set.empty)
 
 }
