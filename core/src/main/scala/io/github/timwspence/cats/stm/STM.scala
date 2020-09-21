@@ -232,15 +232,7 @@ object STM {
             fallbacks = (fallback, log.snapshot(), conts) :: fallbacks
             go(attempt)
           case Abort(error) =>
-            //TODO do we use fallback on error?
-            if (fallbacks.isEmpty) TFailure(error)
-            else {
-              val (fb, lg, cts) = fallbacks.head
-              log = lg
-              conts = cts
-              fallbacks = fallbacks.tail
-              go(fb)
-            }
+            TFailure(error)
           case Retry =>
             if (fallbacks.isEmpty) TRetry
             else {
