@@ -10,11 +10,11 @@ import io.github.timwspence.cats.stm.STM.internal._
   *
   * Analagous to `cats.effect.concurrent.Ref`.
   */
-final class TVar[+A] private[stm] (
+final class TVar[A] private[stm] (
   private[stm] val id: Long,
-  //Safe by construction
-  @volatile private[stm] var value: Any,
-  private[stm] val pending: AtomicReference[Map[TxId, Txn]]
+
+  @volatile private[stm] var value: A,
+  private[stm] val pending: AtomicReference[Map[TxId, RetryFiber]]
 ) {
 
   /**
@@ -27,13 +27,13 @@ final class TVar[+A] private[stm] (
     * Set the current value as an
     * `STM` action.
     */
-  def set[B >: A](b: B): STM[Unit] = modify(_ => b)
+  def set(a: A): STM[Unit] = modify(_ => a)
 
   /**
     * Modify the current value as an
     * `STM` action.
     */
-  def modify[B >: A](f: A => B): STM[Unit] = Modify(this, f)
+  def modify(f: A => A): STM[Unit] = Modify(this, f)
 
 }
 

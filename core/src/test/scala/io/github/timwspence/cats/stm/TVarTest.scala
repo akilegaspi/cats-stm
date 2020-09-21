@@ -12,7 +12,7 @@ class TVarTest extends CatsEffectSuite {
       value <- tvar.get
     } yield value
 
-    for (value <- prog.commit[IO]) yield assertEquals(value, "hello")
+    for (value <- prog.atomically[IO]) yield assertEquals(value, "hello")
   }
 
   test("Set changes current value") {
@@ -22,7 +22,7 @@ class TVarTest extends CatsEffectSuite {
       value <- tvar.get
     } yield value
 
-    for (value <- prog.commit[IO]) yield assertEquals(value, "world")
+    for (value <- prog.atomically[IO]) yield assertEquals(value, "world")
   }
 
   test("Modify changes current value") {
@@ -32,18 +32,18 @@ class TVarTest extends CatsEffectSuite {
       value <- tvar.get
     } yield value
 
-    for (value <- prog.commit[IO]) yield assertEquals(value, "HELLO")
+    for (value <- prog.atomically[IO]) yield assertEquals(value, "HELLO")
   }
 
   test("Pending transaction is removed on success") {
-    val tvar = TVar.of("foo").commit[IO].unsafeRunSync
+    val tvar = TVar.of("foo").atomically[IO].unsafeRunSync
 
     val prog: STM[String] = for {
       _     <- tvar.modify(_.toUpperCase)
       value <- tvar.get
     } yield value
 
-    for (value <- prog.commit[IO]) yield {
+    for (value <- prog.atomically[IO]) yield {
       assertEquals(value, "FOO")
 
       assertEquals(tvar.value, "FOO")
@@ -52,7 +52,7 @@ class TVarTest extends CatsEffectSuite {
   }
 
   test("Pending transaction is removed on failure") {
-    val tvar = TVar.of("foo").commit[IO].unsafeRunSync
+    val tvar = TVar.of("foo").atomically[IO].unsafeRunSync
 
     val prog: STM[String] = for {
       _     <- tvar.modify(_.toUpperCase)
@@ -60,7 +60,7 @@ class TVarTest extends CatsEffectSuite {
       value <- tvar.get
     } yield value
 
-    for (_ <- prog.commit[IO].attempt) yield {
+    for (_ <- prog.atomically[IO].attempt) yield {
       assertEquals(tvar.value, "foo")
 
       assert(tvar.pending.get.isEmpty)

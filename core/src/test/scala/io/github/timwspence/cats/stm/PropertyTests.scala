@@ -25,7 +25,7 @@ class MaintainsInvariants extends CatsEffectSuite with ScalaCheckEffectSuite {
 
   val tvarGen: Gen[TVar[Long]] = for {
     value <- Gen.posNum[Long]
-  } yield TVar.of(value).commit[IO].unsafeRunSync
+  } yield TVar.of(value).atomically[IO].unsafeRunSync
 
   val txnGen: List[TVar[Long]] => Gen[STM[Unit]] = tvars =>
     for {
@@ -43,7 +43,7 @@ class MaintainsInvariants extends CatsEffectSuite with ScalaCheckEffectSuite {
     tvars <- Gen.listOfN(50, tvarGen)
     total = tvars.foldLeft(0L)((acc, tvar) => acc + tvar.value)
     txns <- Gen.listOf(txnGen(tvars))
-    commit = txns.traverse(_.commit[IO].start)
+    commit = txns.traverse(_.atomically[IO].start)
     run    = commit.flatMap(l => l.traverse(_.join)).void
   } yield (total, tvars, run)
 
