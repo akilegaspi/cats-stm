@@ -117,6 +117,7 @@ object STM {
           STM.synchronized {
             if (!log.isDirty) {
               commit = true
+              println("Committing")
               log.commit()
             }
           }
@@ -235,7 +236,7 @@ object STM {
             if (fallbacks.isEmpty) TRetry
             else {
               val (fb, lg, cts) = fallbacks.head
-              log = lg
+              log = log.delta(lg)
               conts = cts
               fallbacks = fallbacks.tail
               go(fb)
@@ -245,29 +246,39 @@ object STM {
       go(stm).asInstanceOf[TResult[A]] -> log
     }
 
-    case class TLog(private var map: Map[TVar[Any], TLogEntry]) {
+    case class TLog(private var map: Map[TVarId, TLogEntry]) {
 
       def values: Iterable[TLogEntry] = map.values
 
       def get(tvar: TVar[Any]): Any =
-        if (map.contains(tvar))
-          map(tvar).unsafeGet[Any]
+        if (map.contains(tvar.id))
+          map(tvar.id).unsafeGet[Any]
         else {
           val current = tvar.value
-          map = map + (tvar -> TLogEntry(tvar, current))
+          map = map + (tvar.id -> TLogEntry(tvar, current))
           current
         }
 
       def modify(tvar: TVar[Any], f: Any => Any): Unit = {
         val current = get(tvar)
-        val entry   = map(tvar)
+        val entry   = map(tvar.id)
         entry.unsafeSet(f(current))
         ()
       }
 
       def isDirty: Boolean = values.exists(_.isDirty)
 
-      def snapshot(): TLog = TLog(map)
+      def snapshot(): TLog = TLog(Map.from(map.view.mapValues(_.snapshot())))
+
+      def delta(tlog: TLog): TLog = TLog(
+        Map.from(
+          map.foldLeft(tlog.map.view.mapValues(_.snapshot()).toMap) { (acc, p) =>
+            val (id, e) = p
+            val entry = TLogEntry(e.tvar, e.tvar.value)
+            if (acc.contains(id)) acc else acc + (id -> entry)
+          }
+        )
+      )
 // def snapshot: () => Unit = {
 // -        val snapshot: Map[TxId, Any] = map.toMap.map {
 // -          case (id, e) => id -> e.current
@@ -340,9 +351,10 @@ object STM {
     type Cont = Any => STM[Any]
 
     type TxId = Long
+    type TVarId = Long
 
     //TVar is invariant (mutable) so we can't just deal with TVar[Any]
-    abstract class TLogEntry {
+    abstract class TLogEntry { self =>
       type Repr
       var current: Repr
       val initial: Repr
@@ -357,6 +369,14 @@ object STM {
       def reset(): Unit = current = initial
 
       def isDirty: Boolean = initial != tvar.value.asInstanceOf[Repr]
+
+      def snapshot(): TLogEntry =
+        new TLogEntry {
+          override type Repr = self.Repr
+          override var current: Repr    = self.current
+          override val initial: Repr    = self.initial
+          override val tvar: TVar[Repr] = self.tvar
+        }
 
     }
 
