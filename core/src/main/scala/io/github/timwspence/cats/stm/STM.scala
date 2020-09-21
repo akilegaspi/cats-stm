@@ -148,10 +148,10 @@ object STM {
     final case class Pure[A](a: A)                                extends STM[A]
     final case class Bind[A, B](stm: STM[B], f: B => STM[A])      extends STM[A]
     final case class Get[A](tvar: TVar[A])                        extends STM[A]
-    final case class Modify[A](tvar: TVar[A], f: A => A)       extends STM[Unit]
+    final case class Modify[A](tvar: TVar[A], f: A => A)          extends STM[Unit]
     final case class OrElse[A](attempt: STM[A], fallback: STM[A]) extends STM[A]
-    final case class Abort(error: Throwable)                       extends STM[Nothing]
-    final case object Retry                                     extends STM[Nothing]
+    final case class Abort(error: Throwable)                      extends STM[Nothing]
+    final case object Retry                                       extends STM[Nothing]
 
     sealed trait TResult[+A]                    extends Product with Serializable
     final case class TSuccess[A](value: A)      extends TResult[A]
@@ -341,7 +341,6 @@ object STM {
   }
 
 }
-
 
 // final class STM[A] private[stm] (private[stm] val run: TLog => TResult[A]) extends AnyVal {
 

@@ -12,7 +12,6 @@ import io.github.timwspence.cats.stm.STM.internal._
   */
 final class TVar[A] private[stm] (
   private[stm] val id: Long,
-
   @volatile private[stm] var value: A,
   private[stm] val pending: AtomicReference[Map[TxId, RetryFiber]]
 ) {

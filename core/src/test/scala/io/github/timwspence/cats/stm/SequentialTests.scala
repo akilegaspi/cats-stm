@@ -221,7 +221,7 @@ class SequentialTests extends CatsEffectSuite {
   }
 
   test("stack-safe construction") {
-    val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
+    val tvar       = TVar.of(0L).atomically[IO].unsafeRunSync
     val iterations = 100000
 
     IO.pure(
@@ -233,16 +233,18 @@ class SequentialTests extends CatsEffectSuite {
   }
 
   test("stack-safe evaluation") {
-    val tvar = TVar.of(0).atomically[IO].unsafeRunSync
+    val tvar       = TVar.of(0).atomically[IO].unsafeRunSync
     val iterations = 100000
 
-    STM.atomically[IO](
-      1.to(iterations).foldLeft(STM.unit) { (prog, _) =>
-        prog >> tvar.modify(_ + 1)
-      } >> tvar.get
-    ).map { res =>
-      assertEquals(res, iterations)
-    }
+    STM
+      .atomically[IO](
+        1.to(iterations).foldLeft(STM.unit) { (prog, _) =>
+          prog >> tvar.modify(_ + 1)
+        } >> tvar.get
+      )
+      .map { res =>
+        assertEquals(res, iterations)
+      }
 
   }
 
