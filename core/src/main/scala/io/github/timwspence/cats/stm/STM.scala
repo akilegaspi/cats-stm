@@ -120,15 +120,17 @@ object STM {
       r match {
         case TSuccess(res) =>
           var commit = false
+          var pending: List[RetryFiber] = Nil
           STM.synchronized {
             if (!log.isDirty) {
               commit = true
               println("Committing")
               log.commit()
+              pending = log.collectPending()
             }
           }
           if (commit)
-            log.collectPending().traverse_(_.run.asInstanceOf[F[Unit]].start) >> F.pure(res)
+            pending.traverse_(_.run.asInstanceOf[F[Unit]].start) >> F.pure(res)
           else apply(stm)
         case TFailure(e) => F.raiseError(e)
         case TRetry =>
@@ -186,15 +188,17 @@ object STM {
         r match {
           case TSuccess(res) =>
             var commit = false
+            var pending: List[RetryFiber] = Nil
             STM.synchronized {
               if (!log.isDirty) {
                 commit = true
                 println(s"Committing from retry $txId")
                 log.commit()
+                pending = log.collectPending()
               }
             }
             if (commit)
-              log.collectPending().traverse_(_.run.asInstanceOf[Effect[Unit]].start) >> defer.complete(Right(res))
+              pending.traverse_(_.run.asInstanceOf[Effect[Unit]].start) >> defer.complete(Right(res))
             else run
           case TFailure(e) => defer.complete(Left(e))
           case TRetry      => F.delay(log.registerRetry(txId, this))
@@ -360,8 +364,6 @@ object STM {
       def unsafeSet[A](a: A): Unit = current = a.asInstanceOf[Repr]
 
       def commit(): Unit = tvar.value = current
-
-      def reset(): Unit = current = initial
 
       def isDirty: Boolean = initial != tvar.value.asInstanceOf[Repr]
 
