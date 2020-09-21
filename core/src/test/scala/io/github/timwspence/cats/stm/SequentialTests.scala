@@ -189,33 +189,33 @@ class SequentialTests extends CatsEffectSuite {
     *  atomically invocation both needed to retry - they would have the same
     *  id and hence we would only register one to retry
     */
-  // test("Atomically is referentially transparent") {
-  //   val flag = TVar.of(false).atomically[IO].unsafeRunSync
-  //   val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
+  test("Atomically is referentially transparent") {
+    val flag = TVar.of(false).atomically[IO].unsafeRunSync
+    val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
 
-  //   val retry: IO[Unit] = STM.atomically[IO] {
-  //     for {
-  //       current <- flag.get
-  //       _       <- STM.check(current)
-  //       _       <- tvar.modify(_ + 1)
-  //     } yield ()
-  //   }
+    val retry: IO[Unit] = STM.atomically[IO] {
+      for {
+        current <- flag.get
+        _       <- STM.check(current)
+        _       <- tvar.modify(_ + 1)
+      } yield ()
+    }
 
-  //   val background: IO[Unit] =
-  //     for {
-  //       _ <- Timer[IO].sleep(2 seconds)
-  //       _ <- flag.set(true).atomically[IO]
-  //     } yield ()
+    val background: IO[Unit] =
+      for {
+        _ <- Timer[IO].sleep(2 seconds)
+        _ <- flag.set(true).atomically[IO]
+      } yield ()
 
-  //   val prog = for {
-  //     fiber <- background.start
-  //     _     <- retry.start
-  //     _     <- retry.start
-  //     _     <- fiber.join
-  //   } yield ()
+    val prog = for {
+      fiber <- background.start
+      _     <- retry.start
+      _     <- retry.start
+      _     <- fiber.join
+    } yield ()
 
-  //   for (_ <- prog) yield assertEquals(tvar.value, 2L)
-  // }
+    for (_ <- prog) yield assertEquals(tvar.value, 2L)
+  }
 
   test("stack-safe construction") {
     val tvar       = TVar.of(0L).atomically[IO].unsafeRunSync
