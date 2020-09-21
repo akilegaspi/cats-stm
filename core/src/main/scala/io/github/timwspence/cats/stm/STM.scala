@@ -225,9 +225,6 @@ object STM {
           case Get(tvar)                 => go(Pure(log.get(tvar)))
           case Modify(tvar, f)           => go(Pure(log.modify(tvar.asInstanceOf[TVar[Any]], f)))
           case OrElse(attempt, fallback) =>
-            //TODO this isn't quite right as we want to capture tvars that were
-            //modified in the attempt branch (with their values reverted)
-            //so that we register for retry with all possible tvars
             fallbacks = (fallback, log.snapshot(), conts) :: fallbacks
             go(attempt)
           case Abort(error) =>
