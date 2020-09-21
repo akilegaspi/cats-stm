@@ -71,4 +71,32 @@ class TLogTest extends CatsEffectSuite {
     }
   }
 
+  test("snapshot") {
+    TVar.of[Any](1).atomically[IO].map { tvar =>
+      TVar.of[Any](2).atomically[IO].map { tvar2 =>
+        val tlog = TLog.empty
+        tlog.modify(tvar, inc.asInstanceOf[Any => Any])
+        val tlog2 = tlog.snapshot()
+        tlog.modify(tvar, inc.asInstanceOf[Any => Any])
+        assertEquals(tlog2.get(tvar), 2)
+        assertEquals(tlog2.get(tvar2), 2)
+      }
+    }
+  }
+
+  test("delta") {
+    TVar.of[Any](1).atomically[IO].map { tvar =>
+      TVar.of[Any](2).atomically[IO].map { tvar2 =>
+        val tlog = TLog.empty
+        tlog.modify(tvar, inc.asInstanceOf[Any => Any])
+        tlog.modify(tvar2, inc.asInstanceOf[Any => Any])
+        val tlog2 = tlog.snapshot()
+        tlog2.modify(tvar2, inc.asInstanceOf[Any => Any])
+        val d = tlog2.delta(tlog)
+        assertEquals(d.get(tvar), 2)
+        assertEquals(d.get(tvar2), 3)
+      }
+    }
+  }
+
 }
