@@ -276,45 +276,6 @@ object STM {
           }
         )
       )
-// def snapshot: () => Unit = {
-// -        val snapshot: Map[TxId, Any] = map.toMap.map {
-// -          case (id, e) => id -> e.current
-// +      def run: Effect[Unit] = {
-// +        val (r, log) = eval(stm)
-// +        println(s"retrying: $r")
-// +        r match {
-// +          case TSuccess(res) =>
-// +            var commit = false
-// +            STM.synchronized {
-// +              if (!log.isDirty) {
-// +                commit = true
-// +                log.commit()
-// +              }
-// +            }
-// +            if (commit)
-// +              log.collectPending().traverse_(_.run.asInstanceOf[Effect[Unit]].start) >> defer.complete(Right(res))
-// +            else run
-// +          case TFailure(e) => defer.complete(Left(e))
-// +          case TRetry      => F.unit
-//          }
-// -        () =>
-// -          for (pair <- map)
-// -            if (snapshot contains (pair._1))
-// -              //The entry was already modified at
-// -              //some point in the transaction
-// -              pair._2.unsafeSet(snapshot(pair._1))
-// -            else
-// -              //The entry was introduced in the attempted
-// -              //part of the transaction that we are now
-// -              //reverting so we reset to the initial
-// -              //value.
-// -              //We don't want to remove it from the map
-// -              //as we still want to add the currently
-// -              //executing transaction to the set of
-// -              //pending transactions for this tvar if
-// -              //the whole transaction fails.
-// -              pair._2.reset()
-//        }
 
       def commit(): Unit = values.foreach(_.commit())
 

@@ -4,6 +4,8 @@ import cats.effect.IO
 
 import munit.CatsEffectSuite
 
+import scala.concurrent.duration._
+
 class TVarTest extends CatsEffectSuite {
 
   test("Get returns current value") {
@@ -33,6 +35,76 @@ class TVarTest extends CatsEffectSuite {
     } yield value
 
     for (value <- prog.atomically[IO]) yield assertEquals(value, "HELLO")
+  }
+
+  test("Transaction is registered for retry") {
+    val tvar = TVar.of(0).atomically[IO].unsafeRunSync
+
+    val prog: IO[(Int, Int)] = for {
+      fiber     <- (for {
+        current <- tvar.get
+        _ <- STM.check(current > 0)
+      } yield current).atomically[IO].start
+      _ <- IO.sleep(1 second)
+      pending = tvar.pending.get.size
+      _ <- tvar.set(2).atomically[IO]
+      res <- fiber.join
+    } yield (pending, res)
+
+    prog.map { res =>
+      assertEquals(res._1, 1)
+      assertEquals(res._2, 2)
+    }
+
+  }
+
+  test("Transaction is re-registered for retry") {
+    val tvar = TVar.of(0).atomically[IO].unsafeRunSync
+
+    val prog: IO[(Int, Int, Int)] = for {
+      fiber     <- (for {
+        current <- tvar.get
+        _ <- STM.check(current > 1)
+      } yield current).atomically[IO].start
+      _ <- IO.sleep(1 second)
+      pending = tvar.pending.get.size
+      _ <- tvar.set(1).atomically[IO]
+      _ <- IO.sleep(1 second)
+      pending2 = tvar.pending.get.size
+      _ <- tvar.set(2).atomically[IO]
+      _ <- IO.sleep(1 second)
+      pending3 = tvar.pending.get.size
+      _ <- fiber.join
+    } yield (pending, pending2, pending3)
+
+    prog.map { res =>
+      assertEquals(res._1, 1)
+      assertEquals(res._2, 1)
+      assertEquals(res._3, 0)
+    }
+
+  }
+
+  test("Retry is unregistered on success") {
+    val tvar = TVar.of(0).atomically[IO].unsafeRunSync
+
+    val prog: IO[(Int, Int)] = for {
+      fiber     <- (for {
+        current <- tvar.get
+        _ <- STM.check(current > 0)
+      } yield current).atomically[IO].start
+      _ <- IO.sleep(1 second)
+      pending = tvar.pending.get.size
+      _ <- tvar.set(2).atomically[IO]
+      _ <- fiber.join
+      pending2 = tvar.pending.get.size
+    } yield (pending, pending2)
+
+    prog.map { res =>
+      assertEquals(res._1, 1)
+      assertEquals(res._2, 0)
+    }
+
   }
 
   test("Pending transaction is removed on success") {
