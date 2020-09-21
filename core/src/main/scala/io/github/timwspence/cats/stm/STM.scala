@@ -136,8 +136,6 @@ object STM {
             txId <- F.delay(IdGen.incrementAndGet())
             defer <- Deferred[F, Either[Throwable, A]]
             retryFiber = RetryFiber.make(stm, txId, defer)
-            //TODO keep the same id every retry so we can do cancellation
-            //should be fine as we remove from the map every time
             _ <- F.delay(log.registerRetry(txId, retryFiber))
             //TODO onCancel cancel/remove retry fiber
             e   <- defer.get
