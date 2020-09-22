@@ -107,47 +107,53 @@ object STM {
     new Monoid[STM[A]] {
       override def empty: STM[A] = STM.pure(M.empty)
 
-      override def combine(x: STM[A], y: STM[A]): STM[A] = for {
-        l <- x
-        r <- y
-      } yield M.combine(l, r)
+      override def combine(x: STM[A], y: STM[A]): STM[A] =
+        for {
+          l <- x
+          r <- y
+        } yield M.combine(l, r)
     }
 
   final class AtomicallyPartiallyApplied[F[_]] {
 
-    def apply[A](stm: STM[A])(implicit F: Concurrent[F]): F[A] = for {
-      e <- F.delay(eval(stm))
-      (r, log) = e
-      //TODO suspend this in F
-      res <- r match {
-        case TSuccess(res) =>
-          var commit = false
-          var pending: List[RetryFiber] = Nil
-          STM.synchronized {
-            if (!log.isDirty) {
-              commit = true
-              println("Committing")
-              log.commit()
-              pending = log.collectPending()
-            }
-          }
-          if (commit)
-            pending.traverse_(_.run.asInstanceOf[F[Unit]].start) >> F.pure(res)
-          else apply(stm)
-        case TFailure(e) => F.raiseError(e)
-        case TRetry =>
-          for {
-            txId <- F.delay(IdGen.incrementAndGet())
-            defer <- Deferred[F, Either[Throwable, A]]
-            retryFiber = RetryFiber.make(stm, txId, log.values.map(_.tvar).toSet ,defer)
-            _ <- F.delay(log.registerRetry(txId, retryFiber))
-            //TODO onCancel cancel/remove retry fiber
-            e   <- defer.get
-            res <- e.fold(F.raiseError[A](_), F.pure(_))
-          } yield res
-      }
+    def apply[A](stm: STM[A])(implicit F: Concurrent[F]): F[A] =
+      for {
+        e <- F.delay(eval(stm))
+        (r, log) = e
+        //TODO suspend this in F
+        res <- r match {
+          case TSuccess(res) =>
+            for {
+              x <- F.delay {
+                var commit                    = false
+                var pending: List[RetryFiber] = Nil
+                STM.synchronized {
+                  if (!log.isDirty) {
+                    commit = true
+                    println("Committing")
+                    log.commit()
+                    pending = log.collectPending()
+                  }
+                }
+                commit -> pending
+              }
+              _ <- x._2.traverse_(_.run.asInstanceOf[F[Unit]].start) >> F.pure(res)
+              r <- if (x._1) F.pure(res) else apply(stm)
+            } yield r
+          case TFailure(e) => F.raiseError(e)
+          case TRetry =>
+            for {
+              txId  <- F.delay(IdGen.incrementAndGet())
+              defer <- Deferred[F, Either[Throwable, A]]
+              retryFiber = RetryFiber.make(stm, txId, log.values.map(_.tvar).toSet, defer)
+              _ <- F.delay(log.registerRetry(txId, retryFiber))
+              //TODO onCancel cancel/remove retry fiber
+              e   <- defer.get
+              res <- e.fold(F.raiseError[A](_), F.pure(_))
+            } yield res
+        }
 
-    } yield res
+      } yield res
 
   }
 
@@ -180,39 +186,41 @@ object STM {
       val tvars: Set[TVar[_]]
       implicit def F: Concurrent[Effect]
 
-      def run: Effect[Unit] = for {
-        _ <- F.delay(println(s"running fiber $txId"))
-        e <- F.delay(eval(stm))
-        (r, log) = e
-        res <-r  match {
-          case TSuccess(res) => for {
-            x <- F.delay {
-              var commit = false
-              var pending: List[RetryFiber] = Nil
-              STM.synchronized {
-                if (!log.isDirty) {
-                  println(s"Committing from retry $txId")
-                  commit = true
-                  log.commit()
-                  pending = log.collectPending()
+      def run: Effect[Unit] =
+        for {
+          _ <- F.delay(println(s"running fiber $txId"))
+          e <- F.delay(eval(stm))
+          (r, log) = e
+          res <- r match {
+            case TSuccess(res) =>
+              for {
+                x <- F.delay {
+                  var commit                    = false
+                  var pending: List[RetryFiber] = Nil
+                  STM.synchronized {
+                    if (!log.isDirty) {
+                      println(s"Committing from retry $txId")
+                      commit = true
+                      log.commit()
+                      pending = log.collectPending()
+                    }
+                  }
+                  (commit, pending)
                 }
-              }
-              (commit, pending)
-            }
-            _ <- x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start)
-            _ <- if (x._1) defer.complete(Right(res)) else run
-          } yield ()
-          case TFailure(e) => defer.complete(Left(e))
-          case TRetry      => F.delay(log.registerRetry(txId, this))
-        }
-      } yield res
+                _ <- x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start)
+                _ <- if (x._1) defer.complete(Right(res)) else run
+              } yield ()
+            case TFailure(e) => defer.complete(Left(e))
+            case TRetry      => F.delay(log.registerRetry(txId, this))
+          }
+        } yield res
     }
 
     object RetryFiber {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
-      def make[F[_], A](stm0: STM[A], txId0: TxId, tvars0: Set[TVar[_]], defer0: Deferred[F, Either[Throwable, A]])(implicit
-        F0: Concurrent[F]
+      def make[F[_], A](stm0: STM[A], txId0: TxId, tvars0: Set[TVar[_]], defer0: Deferred[F, Either[Throwable, A]])(
+        implicit F0: Concurrent[F]
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
           type Effect[X] = F[X]
@@ -238,12 +246,12 @@ object STM {
             if (conts.isEmpty) {
               println("Succeeded")
               TSuccess(a)
-            }
-            else {
+            } else {
               val f = conts.head
               conts = conts.tail
               go(f(a))
             }
+          //TODO suspend this whole method in F as IdGen is not referentially transparent
           case Alloc(a) => go(Pure((new TVar(IdGen.incrementAndGet(), a, new AtomicReference(Map())))))
           case Bind(stm, f) =>
             conts = f :: conts
@@ -318,7 +326,7 @@ object STM {
         values.foreach { e =>
           println(s"Registering txn $txId with tvar ${e.tvar.id}")
           e.tvar.pending
-          //TODO is this necessary now 2.11 support is gone?
+            //TODO is this necessary now 2.11 support is gone?
             .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
         }
       }
