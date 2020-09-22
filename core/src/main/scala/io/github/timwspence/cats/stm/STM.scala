@@ -115,9 +115,11 @@ object STM {
 
   final class AtomicallyPartiallyApplied[F[_]] {
 
-    def apply[A](stm: STM[A])(implicit F: Concurrent[F]): F[A] = {
-      val (r, log) = eval(stm)
-      r match {
+    def apply[A](stm: STM[A])(implicit F: Concurrent[F]): F[A] = for {
+      e <- F.delay(eval(stm))
+      (r, log) = e
+      //TODO suspend this in F
+      res <- r match {
         case TSuccess(res) =>
           var commit = false
           var pending: List[RetryFiber] = Nil
@@ -137,15 +139,15 @@ object STM {
           for {
             txId <- F.delay(IdGen.incrementAndGet())
             defer <- Deferred[F, Either[Throwable, A]]
-            retryFiber = RetryFiber.make(stm, txId, defer)
+            retryFiber = RetryFiber.make(stm, txId, log.values.map(_.tvar).toSet ,defer)
             _ <- F.delay(log.registerRetry(txId, retryFiber))
             //TODO onCancel cancel/remove retry fiber
             e   <- defer.get
-            res <- e.fold(F.raiseError(_), F.pure(_))
+            res <- e.fold(F.raiseError[A](_), F.pure(_))
           } yield res
       }
 
-    }
+    } yield res
 
   }
 
@@ -175,41 +177,41 @@ object STM {
       val defer: Deferred[Effect, Either[Throwable, Result]]
       val stm: STM[Result]
       val txId: TxId
+      val tvars: Set[TVar[_]]
       implicit def F: Concurrent[Effect]
 
-      def run: Effect[Unit] = {
-        val (r, log) = eval(stm)
-        println(s"retrying $txId: $r")
-        if (debug.get().contains(txId)) {
-          debug.updateAndGet(m => m - txId)
-        } else {
-          println(s"ERROR: $txId not removed")
-        }
-        r match {
-          case TSuccess(res) =>
-            var commit = false
-            var pending: List[RetryFiber] = Nil
-            STM.synchronized {
-              if (!log.isDirty) {
-                commit = true
-                println(s"Committing from retry $txId")
-                log.commit()
-                pending = log.collectPending()
+      def run: Effect[Unit] = for {
+        _ <- F.delay(println(s"running fiber $txId"))
+        e <- F.delay(eval(stm))
+        (r, log) = e
+        res <-r  match {
+          case TSuccess(res) => for {
+            x <- F.delay {
+              var commit = false
+              var pending: List[RetryFiber] = Nil
+              STM.synchronized {
+                if (!log.isDirty) {
+                  println(s"Committing from retry $txId")
+                  commit = true
+                  log.commit()
+                  pending = log.collectPending()
+                }
               }
+              (commit, pending)
             }
-            if (commit)
-              pending.traverse_(_.run.asInstanceOf[Effect[Unit]].start) >> defer.complete(Right(res))
-            else run
+            _ <- x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start)
+            _ <- if (x._1) defer.complete(Right(res)) else run
+          } yield ()
           case TFailure(e) => defer.complete(Left(e))
           case TRetry      => F.delay(log.registerRetry(txId, this))
         }
-      }
+      } yield res
     }
 
     object RetryFiber {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
-      def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(implicit
+      def make[F[_], A](stm0: STM[A], txId0: TxId, tvars0: Set[TVar[_]], defer0: Deferred[F, Either[Throwable, A]])(implicit
         F0: Concurrent[F]
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
@@ -219,6 +221,7 @@ object STM {
           val defer: Deferred[F, Either[Throwable, A]] = defer0
           val stm: STM[A]                              = stm0
           val txId                                     = txId0
+          val tvars                                    = tvars0
           implicit def F: Concurrent[F]                = F0
         }
     }
@@ -234,15 +237,6 @@ object STM {
           case Pure(a) =>
             if (conts.isEmpty) {
               println("Succeeded")
-              if(a.isInstanceOf[TVar[_]]) {
-                val x = a.asInstanceOf[TVar[Object]]
-                val m = TVar.tvarDebug.get()
-                if (m.contains(x.id)) {
-                  println("BOOM!!!!!!!!!!!!!!!!!!!!!!!!!")
-                } else {
-                  TVar.tvarDebug.updateAndGet(m => m + x.id)
-                }
-              }
               TSuccess(a)
             }
             else {
@@ -318,6 +312,7 @@ object STM {
 
       def commit(): Unit = values.foreach(_.commit())
 
+      //TODO fiber needs to track tvars as well so it can ensure it is removed from all of them!!!!!
       def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
         debug.updateAndGet(m => m + (txId -> values.map(_.tvar.id).toSet))
         values.foreach { e =>
@@ -338,6 +333,12 @@ object STM {
 
         }
         println(s"Retrying ${pending.keys.toList}")
+        //Remove the fiber to be run from all tvars
+        pending.values.foreach { retry =>
+          retry.tvars.foreach { t =>
+            t.pending.updateAndGet(m => m - retry.txId)
+          }
+        }
         pending.values.toList
       }
 
