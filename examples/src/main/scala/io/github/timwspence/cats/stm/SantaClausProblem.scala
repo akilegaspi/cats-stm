@@ -7,7 +7,7 @@ import scala.concurrent.duration._
 object SantaClausProblem extends IOApp {
 
   override def run(args: List[String]): IO[ExitCode] =
-    mainProblem.timeout(10.seconds).attempt.as(ExitCode.Success)
+    (mainProblem.timeout(5.seconds).attempt >> debug()).as(ExitCode.Success)
 
   def meetInStudy(id: Int): IO[Unit] = IO(println(show"Elf $id meeting in the study"))
 
@@ -40,15 +40,13 @@ object SantaClausProblem extends IOApp {
         _ <- IO(println("capacity reset"))
         _ <- STM.atomically[IO] {
           for {
-            nLeft <- g.tv.get
-            _     <- STM.check(nLeft === 0)
+            nLeft <- {println("hi"); g.tv.get}
+            _     <- STM.check({println(s"nLeft in operate: $nLeft"); nLeft === 0})
           } yield ()
         }
         _ <- IO(println("Gate operated"))
       } yield ()
   }
-
-  def randomDelay: IO[Unit] = IO(scala.util.Random.nextInt(10000)).flatMap(n => Timer[IO].sleep(n.micros))
 
   def elf(g: Gate, i: Int): IO[Fiber[IO, Nothing]] =
     (
@@ -56,7 +54,6 @@ object SantaClausProblem extends IOApp {
         _ <- IO(println("trying to pass gate"))
         _ <- g.pass
         _ <- meetInStudy(i)
-        _ <- randomDelay
       } yield ()
     ).foreverM.start
 
@@ -70,8 +67,14 @@ object SantaClausProblem extends IOApp {
   def mainProblem: IO[Unit] =
     for {
       g         <- Gate.of(1).atomically[IO]
+      _         <- IO(this.d = Some(g.tv))
       _         <- List(1).traverse_(n => elf(g, n))
       _         <- santa(g).foreverM.void
+      _         <- debug()
     } yield ()
+
+  var d: Option[TVar[Int]] = None
+
+  def debug(): IO[Unit] = IO(println(d.get.pending))
 
 }
