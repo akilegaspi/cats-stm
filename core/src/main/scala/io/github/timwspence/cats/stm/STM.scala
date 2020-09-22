@@ -327,7 +327,7 @@ object STM {
         fiber.tvars = values.map(_.tvar).toSet
         STM.synchronized {
           values.foreach { e =>
-            // println(s"Registering txn $txId with tvar ${e.tvar.id}")
+            println(s"Registering txn $txId with tvar ${e.tvar.id}")
             e.tvar.pending
               //TODO is this necessary now 2.11 support is gone?
               .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))

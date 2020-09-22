@@ -37,6 +37,7 @@ object SantaClausProblem extends IOApp {
                                 } yield ())
         _ <- IO(println("capacity is zero"))
         _ <- STM.atomically[IO](g.tv.set(g.capacity))
+        _ <- debug()
         _ <- IO(println("capacity reset"))
         _ <- STM.atomically[IO] {
           for {
@@ -53,6 +54,7 @@ object SantaClausProblem extends IOApp {
       for {
         _ <- IO(println("trying to pass gate"))
         _ <- g.pass
+        _ <- debug()
         _ <- meetInStudy(i)
       } yield ()
     ).foreverM.start
@@ -75,6 +77,6 @@ object SantaClausProblem extends IOApp {
 
   var d: Option[TVar[Int]] = None
 
-  def debug(): IO[Unit] = IO(println(d.get.pending))
+  def debug(): IO[Unit] = IO(println(s"debug: ${d.get.pending}"))
 
 }
