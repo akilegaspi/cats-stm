@@ -120,13 +120,15 @@ object STM {
       for {
         e <- F.delay(eval(stm))
         (r, log) = e
-        //TODO suspend this in F
         res <- r match {
           case TSuccess(res) =>
             for {
               x <- F.delay {
                 var commit                    = false
                 var pending: List[RetryFiber] = Nil
+                //TODO could sort tvars in log by id and then acquire lock on each
+                //instead of a global lock
+                //but note that we still need a global lock to collect pending (I think...)
                 STM.synchronized {
                   if (!log.isDirty) {
                     commit = true
@@ -137,7 +139,7 @@ object STM {
                 }
                 commit -> pending
               }
-              _ <- x._2.traverse_(_.run.asInstanceOf[F[Unit]].start) >> F.pure(res)
+              _ <- x._2.traverse_(_.run.asInstanceOf[F[Unit]].start)
               r <- if (x._1) F.pure(res) else apply(stm)
             } yield r
           case TFailure(e) => F.raiseError(e)
@@ -173,7 +175,7 @@ object STM {
     sealed trait TResult[+A]                    extends Product with Serializable
     final case class TSuccess[A](value: A)      extends TResult[A]
     final case class TFailure(error: Throwable) extends TResult[Nothing]
-    case object TRetry                          extends TResult[Nothing]
+    final case object TRetry                    extends TResult[Nothing]
 
     abstract class RetryFiber {
 
@@ -234,6 +236,9 @@ object STM {
         }
     }
 
+    //Note that this should always be suspended using F.delay as it increments the global
+    //id generator. However, we don't want eval itself suspended as we want it to be
+    //tail-recursive and compiled to a loop
     def eval[A](stm: STM[A]): (TResult[A], TLog) = {
       var conts: List[Cont]                             = Nil
       var fallbacks: List[(STM[Any], TLog, List[Cont])] = Nil
@@ -244,14 +249,12 @@ object STM {
         stm match {
           case Pure(a) =>
             if (conts.isEmpty) {
-              println("Succeeded")
               TSuccess(a)
             } else {
               val f = conts.head
               conts = conts.tail
               go(f(a))
             }
-          //TODO suspend this whole method in F as IdGen is not referentially transparent
           case Alloc(a) => go(Pure((new TVar(IdGen.incrementAndGet(), a, new AtomicReference(Map())))))
           case Bind(stm, f) =>
             conts = f :: conts
@@ -261,12 +264,10 @@ object STM {
           case OrElse(attempt, fallback) =>
             fallbacks = (fallback, log.snapshot(), conts) :: fallbacks
             println(log.values)
-            println("attempting")
             go(attempt)
           case Abort(error) =>
             TFailure(error)
           case Retry =>
-            println("retrying")
             if (fallbacks.isEmpty) TRetry
             else {
               println("Using fallback")
@@ -274,11 +275,11 @@ object STM {
               log = log.delta(lg)
               conts = cts
               fallbacks = fallbacks.tail
-              println(log.values.map(e => s"Current: ${e.current} Initial: ${e.initial}"))
               go(fb)
             }
         }
 
+      //Safe by construction
       go(stm).asInstanceOf[TResult[A]] -> log
     }
 
@@ -305,12 +306,12 @@ object STM {
 
       def snapshot(): TLog = TLog(Map.from(map.view.mapValues(_.snapshot())))
 
+      //Use tlog as a base and add to it any tvars in the current log, but with their
+      //current values reset to initial
       def delta(tlog: TLog): TLog = {
-        println(tlog.values.map(e => s"Delta base Current: ${e.current} Initial: ${e.initial}"))
-        println(values.map(e => s"Delta diff Current: ${e.current} Initial: ${e.initial}"))
         TLog(
           Map.from(
-            map.foldLeft(tlog.map.view.mapValues(_.snapshot()).toMap) { (acc, p) =>
+            map.foldLeft(tlog.map) { (acc, p) =>
               val (id, e) = p
               if (acc.contains(id)) acc else acc + (id -> TLogEntry(e.tvar, e.tvar.value))
             }
@@ -320,11 +321,10 @@ object STM {
 
       def commit(): Unit = values.foreach(_.commit())
 
-      //TODO fiber needs to track tvars as well so it can ensure it is removed from all of them!!!!!
       def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
         debug.updateAndGet(m => m + (txId -> values.map(_.tvar.id).toSet))
         values.foreach { e =>
-          println(s"Registering txn $txId with tvar ${e.tvar.id}")
+          // println(s"Registering txn $txId with tvar ${e.tvar.id}")
           e.tvar.pending
             //TODO is this necessary now 2.11 support is gone?
             .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
@@ -335,9 +335,7 @@ object STM {
         var pending: Map[TxId, RetryFiber] = Map.empty
         values.foreach { e =>
           val p = e.tvar.pending.getAndSet(Map.empty)
-          println(s"Pending for tvar ${e.tvar.id}: $p")
           pending = pending ++ p
-          println(s"Updated pending: $pending")
 
         }
         println(s"Retrying ${pending.keys.toList}")
