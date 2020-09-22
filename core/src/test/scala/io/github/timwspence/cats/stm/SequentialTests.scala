@@ -157,6 +157,34 @@ class SequentialTests extends CatsEffectSuite {
     }
   }
 
+  test("nested orElse") {
+    val tvar = TVar.of(100).atomically[IO].unsafeRunSync
+
+    val first = for {
+      _ <- tvar.modify(_ - 100)
+      _ <- STM.retry[Unit]
+    } yield ()
+
+    val second = for {
+      _       <- tvar.modify(_ - 10)
+      balance <- tvar.get
+      _       <- STM.check(balance == 50)
+      _       <- tvar.modify(_ - 50)
+    } yield ()
+
+    val third = for {
+      balance <- tvar.get
+      _       <- STM.check(balance == 100)
+      _       <- tvar.modify(_ - 50)
+    } yield ()
+
+    val prog = (first.orElse(second).orElse(third) >> tvar.get).atomically[IO]
+
+    prog.map { res =>
+      assertEquals(res, 50)
+    }
+  }
+
   test("Transaction is retried if TVar in if branch is subsequently modified") {
     val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
 
