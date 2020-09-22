@@ -44,6 +44,8 @@ sealed abstract class STM[+A] {
 
 }
 
+//TODO find non-thread blocking alternative to synchronized or else shift to
+//blocking pool for it
 object STM {
 
   val debug: AtomicReference[Map[TxId, Set[TVarId]]] = new AtomicReference(Map.empty)
@@ -139,19 +141,22 @@ object STM {
                 }
                 commit -> pending
               }
-              _ <- x._2.traverse_(_.run.asInstanceOf[F[Unit]].start)
-              r <- if (x._1) F.pure(res) else apply(stm)
+              r <-
+                if (x._1)
+                  x._2.traverse_(_.run.asInstanceOf[F[Unit]].start) >>
+                    F.pure(res)
+                else apply(stm)
             } yield r
           case TFailure(e) =>
             var dirty = false
             STM.synchronized {
-              if(log.isDirty) dirty = true
+              if (log.isDirty) dirty = true
             }
             if (dirty) apply(stm) else F.raiseError(e)
           case TRetry =>
             var dirty = false
             STM.synchronized {
-              if(log.isDirty) dirty = true
+              if (log.isDirty) dirty = true
             }
             if (dirty) apply(stm)
             else
@@ -220,19 +225,22 @@ object STM {
                   }
                   (commit, pending)
                 }
-                _ <- x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start)
-                _ <- if (x._1) defer.complete(Right(res)) else run
+                _ <-
+                  if (x._1)
+                    x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start) >>
+                      defer.complete(Right(res))
+                  else run
               } yield ()
             case TFailure(e) =>
               var dirty = false
               STM.synchronized {
-                if(log.isDirty) dirty = true
+                if (log.isDirty) dirty = true
               }
               if (dirty) run else defer.complete(Left(e))
             case TRetry =>
               var dirty = false
               STM.synchronized {
-                if(log.isDirty) dirty = true
+                if (log.isDirty) dirty = true
               }
               if (dirty) run
               else F.delay(log.registerRetry(txId, this))
