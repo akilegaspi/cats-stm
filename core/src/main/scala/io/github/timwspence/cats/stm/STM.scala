@@ -325,11 +325,13 @@ object STM {
       def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
         debug.updateAndGet(m => m + (txId -> values.map(_.tvar.id).toSet))
         fiber.tvars = values.map(_.tvar).toSet
-        values.foreach { e =>
-          // println(s"Registering txn $txId with tvar ${e.tvar.id}")
-          e.tvar.pending
-            //TODO is this necessary now 2.11 support is gone?
-            .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
+        STM.synchronized {
+          values.foreach { e =>
+            // println(s"Registering txn $txId with tvar ${e.tvar.id}")
+            e.tvar.pending
+              //TODO is this necessary now 2.11 support is gone?
+              .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
+          }
         }
       }
 
@@ -361,7 +363,7 @@ object STM {
     type TxId   = Long
     type TVarId = Long
 
-    //TVar is invariant (mutable) so we can't just deal with TVar[Any]
+    //Can we replace this with TVar[_] and Any?
     abstract class TLogEntry { self =>
       type Repr
       var current: Repr

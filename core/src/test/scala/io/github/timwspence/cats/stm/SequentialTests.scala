@@ -80,6 +80,32 @@ class SequentialTests extends CatsEffectSuite {
     }
   }
 
+  test("check retries repeatedly") {
+    val tvar = TVar.of(0).atomically[IO].unsafeRunSync
+
+    val retry: STM[Int] = for {
+      current <- tvar.get
+      _       <- STM.check(current > 10)
+    } yield current
+
+    val background: IO[Unit] = 1.to(11)
+      .toList
+      .traverse_( _ =>
+        tvar.modify(_ + 1).atomically[IO] >> IO.sleep(100.millis)
+      )
+
+    val prog = for {
+      fiber <- background.start
+      res <- retry.atomically[IO]
+      _ <- fiber.join
+    } yield res
+
+    prog.map { res =>
+      assertEquals(res, 11)
+    }
+
+  }
+
   test("OrElse runs second transaction if first retries") {
     val account = TVar.of(100).atomically[IO].unsafeRunSync
 
