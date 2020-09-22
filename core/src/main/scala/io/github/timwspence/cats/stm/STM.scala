@@ -9,7 +9,6 @@ import cats.effect.implicits._
 import cats.effect.concurrent.Deferred
 
 import scala.annotation.tailrec
-import scala.compat.java8.FunctionConverters._
 
 import io.github.timwspence.cats.stm.STM.internal._
 import java.util.concurrent.atomic.AtomicReference
@@ -327,10 +326,7 @@ object STM {
         fiber.tvars = values.map(_.tvar).toSet
         STM.synchronized {
           values.foreach { e =>
-            println(s"Registering txn $txId with tvar ${e.tvar.id}")
-            e.tvar.pending
-              //TODO is this necessary now 2.11 support is gone?
-              .updateAndGet(asJavaUnaryOperator(m => m + (txId -> fiber)))
+            e.tvar.registerRetry(txId, fiber)
           }
         }
       }
@@ -338,7 +334,7 @@ object STM {
       def collectPending(): List[RetryFiber] = {
         var pending: Map[TxId, RetryFiber] = Map.empty
         values.foreach { e =>
-          val p = e.tvar.pending.getAndSet(Map.empty)
+          val p = e.tvar.unregisterAll()
           pending = pending ++ p
 
         }
@@ -346,7 +342,7 @@ object STM {
         //Remove the fiber to be run from all tvars
         pending.values.foreach { retry =>
           retry.tvars.foreach { t =>
-            t.pending.updateAndGet(m => m - retry.txId)
+            t.unregisterRetry(retry.txId)
           }
         }
         pending.values.toList

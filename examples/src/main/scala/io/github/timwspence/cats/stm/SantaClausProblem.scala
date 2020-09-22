@@ -33,7 +33,7 @@ object SantaClausProblem extends IOApp {
         _ <- IO(println("Operating gate"))
         _ <- STM.atomically[IO](for {
                                   c <- g.tv.get
-                                  _ <- STM.check(c == 0)
+                                  _ <- {println(s"pending is: ${d.get.pending}"); STM.check(c == 0)}
                                 } yield ())
         _ <- IO(println("capacity is zero"))
         _ <- STM.atomically[IO](g.tv.set(g.capacity))

@@ -34,6 +34,20 @@ final class TVar[A] private[stm] (
     */
   def modify(f: A => A): STM[Unit] = Modify(this, f)
 
+  private[stm] def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
+    println(s"Registering $txId with tvar $id")
+    pending.updateAndGet(m => m + (txId -> fiber))
+    ()
+  }
+
+  private[stm] def unregisterRetry(txId: TxId): Unit = {
+    println(s"Unregistering $txId with tvar $id")
+    pending.updateAndGet(m => m - txId)
+    ()
+  }
+
+  private[stm] def unregisterAll(): Map[TxId, RetryFiber] = pending.getAndSet(Map.empty)
+
 }
 
 object TVar {
