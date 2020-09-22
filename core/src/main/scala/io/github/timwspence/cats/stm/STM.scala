@@ -134,6 +134,7 @@ object STM {
                 STM.synchronized {
                   if (!log.isDirty) {
                     commit = true
+                    println(s"success: commit is $commit")
                     println("Committing")
                     log.commit()
                     pending = log.collectPending()
@@ -148,27 +149,34 @@ object STM {
                 else apply(stm)
             } yield r
           case TFailure(e) =>
-            var dirty = false
-            STM.synchronized {
-              if (log.isDirty) dirty = true
-            }
-            if (dirty) apply(stm) else F.raiseError(e)
+            for {
+              dirty <- F.delay {
+                STM.synchronized {
+                  log.isDirty
+                }
+              }
+              res <- if (dirty) apply(stm) else F.raiseError[A](e)
+            } yield res
           case TRetry =>
-            var dirty = false
-            STM.synchronized {
-              if (log.isDirty) dirty = true
-            }
-            if (dirty) apply(stm)
-            else
-              for {
-                txId  <- F.delay(IdGen.incrementAndGet())
-                defer <- Deferred[F, Either[Throwable, A]]
-                retryFiber = RetryFiber.make(stm, txId, defer)
-                _ <- F.delay(log.registerRetry(txId, retryFiber))
-                //TODO onCancel cancel/remove retry fiber
-                e   <- defer.get
-                res <- e.fold(F.raiseError[A](_), F.pure(_))
-              } yield res
+            for {
+              txId  <- F.delay(IdGen.incrementAndGet())
+              defer <- Deferred[F, Either[Throwable, A]]
+              retryFiber = RetryFiber.make(stm, txId, defer)
+              dirty <- F.delay {
+                if (log.isDirty) true
+                else {
+                  log.registerRetry(txId, retryFiber)
+                  false
+                }
+              }
+              res <-
+                if (dirty) apply(stm)
+                else
+                  for {
+                    e   <- defer.get
+                    res <- e.fold(F.raiseError[A](_), F.pure(_))
+                  } yield res
+            } yield res
         }
 
       } yield res
@@ -232,18 +240,26 @@ object STM {
                   else run
               } yield ()
             case TFailure(e) =>
-              var dirty = false
-              STM.synchronized {
-                if (log.isDirty) dirty = true
-              }
-              if (dirty) run else defer.complete(Left(e))
+              for {
+                dirty <- F.delay {
+                  STM.synchronized {
+                    log.isDirty
+                  }
+                }
+                res <- if (dirty) run else defer.complete(Left(e))
+              } yield res
             case TRetry =>
-              var dirty = false
-              STM.synchronized {
-                if (log.isDirty) dirty = true
-              }
-              if (dirty) run
-              else F.delay(log.registerRetry(txId, this))
+              for {
+                dirty <- F.delay {
+                  STM.synchronized {
+                    if (log.isDirty) true else {
+                      log.registerRetry(txId, this)
+                      false
+                    }
+                  }
+                }
+                res <- if (dirty) run else F.unit
+              } yield res
           }
         } yield res
     }
@@ -399,7 +415,11 @@ object STM {
 
       def unsafeSet[A](a: A): Unit = current = a.asInstanceOf[Repr]
 
-      def commit(): Unit = tvar.value = current
+      def commit(): Unit = {
+        println(s"Committing value $current to tvar ${tvar.id}")
+        tvar.value = current
+        println(s"tvar ${tvar.id} value is now ${tvar.value}")
+      }
 
       def isDirty: Boolean = initial != tvar.value.asInstanceOf[Repr]
 

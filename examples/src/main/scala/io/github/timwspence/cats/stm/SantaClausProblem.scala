@@ -52,8 +52,9 @@ object SantaClausProblem extends IOApp {
   def elf(g: Gate, i: Int): IO[Fiber[IO, Nothing]] =
     (
       for {
-        _ <- IO(println("trying to pass gate"))
+        _ <- IO(println("elf trying to pass gate"))
         _ <- g.pass
+        _ <- IO(println("elf passed gate"))
         _ <- debug()
         _ <- meetInStudy(i)
       } yield ()
