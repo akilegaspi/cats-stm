@@ -142,7 +142,12 @@ object STM {
               _ <- x._2.traverse_(_.run.asInstanceOf[F[Unit]].start)
               r <- if (x._1) F.pure(res) else apply(stm)
             } yield r
-          case TFailure(e) => F.raiseError(e)
+          case TFailure(e) =>
+            var dirty = false
+            STM.synchronized {
+              if(log.isDirty) dirty = true
+            }
+            if (dirty) apply(stm) else F.raiseError(e)
           case TRetry =>
             var dirty = false
             STM.synchronized {
@@ -218,7 +223,12 @@ object STM {
                 _ <- x._2.traverse_(_.run.asInstanceOf[Effect[Unit]].start)
                 _ <- if (x._1) defer.complete(Right(res)) else run
               } yield ()
-            case TFailure(e) => defer.complete(Left(e))
+            case TFailure(e) =>
+              var dirty = false
+              STM.synchronized {
+                if(log.isDirty) dirty = true
+              }
+              if (dirty) run else defer.complete(Left(e))
             case TRetry =>
               var dirty = false
               STM.synchronized {
