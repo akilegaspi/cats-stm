@@ -17,13 +17,13 @@ object SantaClausProblem extends IOApp {
   }
   object Gate {
     def of(capacity: Int) =
-      TVar.of(0).map(new Gate(capacity, _) {})
+      TVar.of(1).map(new Gate(capacity, _) {})
 
     def pass(g: Gate): IO[Unit] =
       STM.atomically[IO] {
         for {
           nLeft <- g.tv.get
-          _     <- STM.check(nLeft > 0)
+          _     <- STM.check({println(s"nleft is $nLeft"); nLeft > 0})
           _     <- g.tv.modify(_ - 1)
         } yield ()
       }
@@ -35,6 +35,7 @@ object SantaClausProblem extends IOApp {
                                   c <- g.tv.get
                                   _ <- STM.check(c == 0)
                                 } yield ())
+        _ <- IO(println("capacity is zero"))
         _ <- STM.atomically[IO](g.tv.set(g.capacity))
         _ <- IO(println("capacity reset"))
         _ <- STM.atomically[IO] {
@@ -52,6 +53,7 @@ object SantaClausProblem extends IOApp {
   def elf(g: Gate, i: Int): IO[Fiber[IO, Nothing]] =
     (
       for {
+        _ <- IO(println("trying to pass gate"))
         _ <- g.pass
         _ <- meetInStudy(i)
         _ <- randomDelay
