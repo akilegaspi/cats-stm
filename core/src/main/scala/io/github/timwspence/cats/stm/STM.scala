@@ -94,6 +94,7 @@ object STM {
   implicit val stmMonad: Monad[STM] with MonoidK[STM] = new Monad[STM] with MonoidK[STM] {
     override def flatMap[A, B](fa: STM[A])(f: A => STM[B]): STM[B] = fa.flatMap(f)
 
+    //TODO reimplement this
     override def tailRecM[A, B](a: A)(f: A => STM[Either[A, B]]): STM[B] = ???
 
     override def pure[A](x: A): STM[A] = STM.pure(x)
@@ -147,7 +148,7 @@ object STM {
             for {
               txId  <- F.delay(IdGen.incrementAndGet())
               defer <- Deferred[F, Either[Throwable, A]]
-              retryFiber = RetryFiber.make(stm, txId, log.values.map(_.tvar).toSet, defer)
+              retryFiber = RetryFiber.make(stm, txId, defer)
               _ <- F.delay(log.registerRetry(txId, retryFiber))
               //TODO onCancel cancel/remove retry fiber
               e   <- defer.get
@@ -185,7 +186,7 @@ object STM {
       val defer: Deferred[Effect, Either[Throwable, Result]]
       val stm: STM[Result]
       val txId: TxId
-      val tvars: Set[TVar[_]]
+      var tvars: Set[TVar[_]] = Set.empty
       implicit def F: Concurrent[Effect]
 
       def run: Effect[Unit] =
@@ -221,7 +222,7 @@ object STM {
     object RetryFiber {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
-      def make[F[_], A](stm0: STM[A], txId0: TxId, tvars0: Set[TVar[_]], defer0: Deferred[F, Either[Throwable, A]])(
+      def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(
         implicit F0: Concurrent[F]
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
@@ -231,7 +232,6 @@ object STM {
           val defer: Deferred[F, Either[Throwable, A]] = defer0
           val stm: STM[A]                              = stm0
           val txId                                     = txId0
-          val tvars                                    = tvars0
           implicit def F: Concurrent[F]                = F0
         }
     }
@@ -323,6 +323,7 @@ object STM {
 
       def registerRetry(txId: TxId, fiber: RetryFiber): Unit = {
         debug.updateAndGet(m => m + (txId -> values.map(_.tvar.id).toSet))
+        fiber.tvars = values.map(_.tvar).toSet
         values.foreach { e =>
           // println(s"Registering txn $txId with tvar ${e.tvar.id}")
           e.tvar.pending
