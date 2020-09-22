@@ -1,6 +1,5 @@
 package io.github.timwspence.cats.stm
 // import io.github.timwspence.cats.stm._
-import cats.data._
 import cats.effect._
 import cats.implicits._
 import scala.concurrent.duration._
@@ -8,11 +7,9 @@ import scala.concurrent.duration._
 object SantaClausProblem extends IOApp {
 
   override def run(args: List[String]): IO[ExitCode] =
-    (mainProblem.timeout(20.seconds).attempt >> IO(println(STM.debug.get()))).as(ExitCode.Success)
+    mainProblem.timeout(10.seconds).attempt.as(ExitCode.Success)
 
   def meetInStudy(id: Int): IO[Unit] = IO(println(show"Elf $id meeting in the study"))
-
-  def deliverToys(id: Int): IO[Unit] = IO(println(show"Reindeer $id delivering toys"))
 
   sealed abstract case class Gate(capacity: Int, tv: TVar[Int]) {
     def pass: IO[Unit]    = Gate.pass(this)
@@ -33,113 +30,46 @@ object SantaClausProblem extends IOApp {
 
     def operate(g: Gate): IO[Unit] =
       for {
+        _ <- IO(println("Operating gate"))
+        _ <- STM.atomically[IO](for {
+                                  c <- g.tv.get
+                                  _ <- STM.check(c == 0)
+                                } yield ())
         _ <- STM.atomically[IO](g.tv.set(g.capacity))
+        _ <- IO(println("capacity reset"))
         _ <- STM.atomically[IO] {
           for {
             nLeft <- g.tv.get
             _     <- STM.check(nLeft === 0)
           } yield ()
         }
+        _ <- IO(println("Gate operated"))
       } yield ()
   }
-
-  sealed abstract case class Group(
-    n: Int,
-    tv: TVar[(Int, Gate, Gate)]
-  ) {
-    def join: IO[(Gate, Gate)]   = Group.join(this)
-    def await: STM[(Gate, Gate)] = Group.await(this)
-  }
-  object Group {
-    def of(n: Int): IO[Group] =
-      STM.atomically[IO] {
-        for {
-          g1 <- Gate.of(n)
-          g2 <- Gate.of(n)
-          tv <- TVar.of((n, g1, g2))
-        } yield new Group(n, tv) {}
-      }
-
-    def join(g: Group): IO[(Gate, Gate)] =
-      STM.atomically[IO] {
-        for {
-          (nLeft, g1, g2) <- g.tv.get
-          _               <- STM.check(nLeft > 0)
-          _               <- g.tv.set((nLeft - 1, g1, g2))
-        } yield (g1, g2)
-      }
-    def await(g: Group): STM[(Gate, Gate)] =
-      for {
-        (nLeft, g1, g2) <- g.tv.get
-        _               <- STM.check(nLeft === 0)
-        newG1           <- Gate.of(g.n)
-        newG2           <- Gate.of(g.n)
-        _               <- g.tv.set((g.n, newG1, newG2))
-      } yield (g1, g2)
-  }
-
-  def helper1(group: Group, doTask: IO[Unit]): IO[Unit] =
-    for {
-      (inGate, outGate) <- group.join
-      _                 <- inGate.pass
-      _                 <- doTask
-      _                 <- outGate.pass
-    } yield ()
-
-  def elf2(group: Group, id: Int): IO[Unit] =
-    helper1(group, meetInStudy(id))
-
-  def reindeer2(group: Group, id: Int): IO[Unit] =
-    helper1(group, deliverToys(id))
 
   def randomDelay: IO[Unit] = IO(scala.util.Random.nextInt(10000)).flatMap(n => Timer[IO].sleep(n.micros))
 
-  def elf(g: Group, i: Int): IO[Fiber[IO, Nothing]] =
-    (elf2(g, i) >> randomDelay).foreverM.start
-
-  def reindeer(g: Group, i: Int): IO[Fiber[IO, Nothing]] =
-    (reindeer2(g, i) >> randomDelay).foreverM.start
-
-  def choose[A](choices: NonEmptyList[(STM[A], A => IO[Unit])]): IO[Unit] = {
-    def actions: NonEmptyList[STM[IO[Unit]]] =
-      choices.map {
-        case (guard, rhs) =>
-          for {
-            value <- guard
-          } yield rhs(value)
-      }
-    for {
-      act <- STM.atomically[IO](actions.reduceLeft(_.orElse(_)))
-      _   <- act
-    } yield ()
-  }
-
-  def santa(elfGroup: Group, reinGroup: Group): IO[Unit] = {
-    def run(task: String, gates: (Gate, Gate)): IO[Unit] =
+  def elf(g: Gate, i: Int): IO[Fiber[IO, Nothing]] =
+    (
       for {
-        _ <- IO(println(show"Ho! Ho! Ho! let’s $task"))
-        _ <- gates._1.operate
-        _ <- gates._2.operate
+        _ <- g.pass
+        _ <- meetInStudy(i)
+        _ <- randomDelay
       } yield ()
+    ).foreverM.start
 
+  def santa(elfGroup: Gate): IO[Unit] = {
     for {
-      _ <- IO(println("----------"))
-      _ <- choose[(Gate, Gate)](
-        NonEmptyList.of(
-          (reinGroup.await, { g: (Gate, Gate) => run("deliver toys", g) }),
-          (elfGroup.await, { g: (Gate, Gate) => run("meet in study", g) })
-        )
-      )
+      _ <- IO(println(show"Ho! Ho! Ho! let’s do elf stuff"))
+      _ <- elfGroup.operate
     } yield ()
   }
 
   def mainProblem: IO[Unit] =
     for {
-      elfGroup  <- Group.of(1)
-      _         <- List(1).traverse_(n => elf(elfGroup, n))
-      reinGroup <- Group.of(1)
-      _         <- List(1).traverse_(n => reindeer(reinGroup, n))
-      _         <- santa(elfGroup, reinGroup).foreverM.void
+      g         <- Gate.of(1).atomically[IO]
+      _         <- List(1).traverse_(n => elf(g, n))
+      _         <- santa(g).foreverM.void
     } yield ()
 
 }
