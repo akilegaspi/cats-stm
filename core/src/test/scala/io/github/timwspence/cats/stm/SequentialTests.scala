@@ -250,6 +250,30 @@ class SequentialTests extends CatsEffectSuite {
     for (_ <- prog) yield assertEquals(tvar.value, 2L)
   }
 
+  test("Atomically is referentially transparent 2") {
+    val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
+
+    val inc: IO[Unit] = tvar.modify(_ + 1).atomically[IO]
+
+    val prog = inc >> inc >> inc >> inc >> inc >> tvar.get.atomically[IO]
+
+    prog.map { res =>
+      assertEquals(res, 5L)
+    }
+  }
+
+  test("Modify is referentially transparent 2") {
+    val tvar = TVar.of(0L).atomically[IO].unsafeRunSync
+
+    val inc: STM[Unit] = tvar.modify(_ + 1)
+
+    val prog = (inc >> inc >> inc >> inc >> inc >> tvar.get).atomically[IO]
+
+    prog.map { res =>
+      assertEquals(res, 5L)
+    }
+  }
+
   test("stack-safe construction") {
     val tvar       = TVar.of(0L).atomically[IO].unsafeRunSync
     val iterations = 100000

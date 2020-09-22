@@ -60,7 +60,7 @@ class TLogTest extends CatsEffectSuite {
   test("register retry") {
     TVar.of[Any](1).atomically[IO].map { tvar =>
       TVar.of[Any](2).atomically[IO].map { tvar2 =>
-        val retryFiber = RetryFiber.make(tvar.get, 1L, Set.empty, Deferred.unsafe[IO, Either[Throwable, Any]])
+        val retryFiber = RetryFiber.make(tvar.get, 1L, Deferred.unsafe[IO, Either[Throwable, Any]])
         val tlog       = TLog.empty
         tlog.modify(tvar, inc.asInstanceOf[Any => Any])
         tlog.modify(tvar2, inc.asInstanceOf[Any => Any])

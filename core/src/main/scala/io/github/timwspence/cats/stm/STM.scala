@@ -308,6 +308,7 @@ object STM {
 
       //Use tlog as a base and add to it any tvars in the current log, but with their
       //current values reset to initial
+      //tlog should already have been snapshotted
       def delta(tlog: TLog): TLog = {
         TLog(
           Map.from(
