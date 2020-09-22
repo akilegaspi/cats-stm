@@ -57,6 +57,7 @@ object SantaClausProblem extends IOApp {
         _ <- IO(println("elf passed gate"))
         _ <- debug()
         _ <- meetInStudy(i)
+        _ <- IO.sleep(10000.micros)
       } yield ()
     ).foreverM.start
 

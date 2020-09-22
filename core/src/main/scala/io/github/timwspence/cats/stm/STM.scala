@@ -170,9 +170,10 @@ object STM {
                 }
               }
               res <-
-                if (dirty) apply(stm)
+                if (dirty) F.delay(println("re-running retry immediately")) >> apply(stm)
                 else
                   for {
+                    _ <- F.delay(println("retrying later"))
                     e   <- defer.get
                     res <- e.fold(F.raiseError[A](_), F.pure(_))
                   } yield res
@@ -258,7 +259,7 @@ object STM {
                     }
                   }
                 }
-                res <- if (dirty) run else F.unit
+                res <- if (dirty) F.delay(println("retrying fiber now")) >> run else F.delay(println("retrying fiber later")) >> F.unit
               } yield res
           }
         } yield res
