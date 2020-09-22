@@ -144,15 +144,21 @@ object STM {
             } yield r
           case TFailure(e) => F.raiseError(e)
           case TRetry =>
-            for {
-              txId  <- F.delay(IdGen.incrementAndGet())
-              defer <- Deferred[F, Either[Throwable, A]]
-              retryFiber = RetryFiber.make(stm, txId, defer)
-              _ <- F.delay(log.registerRetry(txId, retryFiber))
-              //TODO onCancel cancel/remove retry fiber
-              e   <- defer.get
-              res <- e.fold(F.raiseError[A](_), F.pure(_))
-            } yield res
+            var dirty = false
+            STM.synchronized {
+              if(log.isDirty) dirty = true
+            }
+            if (dirty) apply(stm)
+            else
+              for {
+                txId  <- F.delay(IdGen.incrementAndGet())
+                defer <- Deferred[F, Either[Throwable, A]]
+                retryFiber = RetryFiber.make(stm, txId, defer)
+                _ <- F.delay(log.registerRetry(txId, retryFiber))
+                //TODO onCancel cancel/remove retry fiber
+                e   <- defer.get
+                res <- e.fold(F.raiseError[A](_), F.pure(_))
+              } yield res
         }
 
       } yield res
@@ -213,7 +219,13 @@ object STM {
                 _ <- if (x._1) defer.complete(Right(res)) else run
               } yield ()
             case TFailure(e) => defer.complete(Left(e))
-            case TRetry      => F.delay(log.registerRetry(txId, this))
+            case TRetry =>
+              var dirty = false
+              STM.synchronized {
+                if(log.isDirty) dirty = true
+              }
+              if (dirty) run
+              else F.delay(log.registerRetry(txId, this))
           }
         } yield res
     }
@@ -221,8 +233,8 @@ object STM {
     object RetryFiber {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
-      def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(
-        implicit F0: Concurrent[F]
+      def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(implicit
+        F0: Concurrent[F]
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
           type Effect[X] = F[X]
@@ -247,9 +259,9 @@ object STM {
       def go(stm: STM[Any]): TResult[Any] =
         stm match {
           case Pure(a) =>
-            if (conts.isEmpty) {
+            if (conts.isEmpty)
               TSuccess(a)
-            } else {
+            else {
               val f = conts.head
               conts = conts.tail
               go(f(a))
@@ -308,7 +320,7 @@ object STM {
       //Use tlog as a base and add to it any tvars in the current log, but with their
       //current values reset to initial
       //tlog should already have been snapshotted
-      def delta(tlog: TLog): TLog = {
+      def delta(tlog: TLog): TLog =
         TLog(
           Map.from(
             map.foldLeft(tlog.map) { (acc, p) =>
@@ -317,7 +329,6 @@ object STM {
             }
           )
         )
-      }
 
       def commit(): Unit = values.foreach(_.commit())
 
