@@ -1,13 +1,11 @@
 package io.github.timwspence.cats.stm
 
-import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
-import java.util.concurrent.{Executors, ThreadFactory}
+import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 
 import scala.annotation.tailrec
 
-import cats.effect.concurrent.Deferred
 import cats.effect.implicits._
-import cats.effect.{Blocker, Concurrent, ContextShift}
+import cats.effect.{Async, Deferred}
 import cats.implicits._
 import cats.{Monoid, MonoidK, StackSafeMonad}
 import io.github.timwspence.cats.stm.STM.internal._
@@ -39,24 +37,11 @@ sealed abstract class STM[+A] {
   /**
     * Run transaction atomically
     */
-  final def atomically[F[+_]: Concurrent: ContextShift]: F[A] = STM.atomically[F](this)
+  final def atomically[F[+_]: Async]: F[A] = STM.atomically[F](this)
 
 }
 
 object STM {
-
-  val blocker: Blocker = Blocker.liftExecutorService(
-    Executors.newCachedThreadPool(
-      new ThreadFactory {
-        val ctr = new AtomicInteger(0)
-        def newThread(r: Runnable): Thread = {
-          val back = new Thread(r, s"stm-blocking-${ctr.getAndIncrement()}")
-          back.setDaemon(true)
-          back
-        }
-      }
-    )
-  )
 
   /**
     * Commit the `STM` action as an `IO` action. The mutable
@@ -124,7 +109,7 @@ object STM {
 
   final class AtomicallyPartiallyApplied[F[_]] {
 
-    def apply[A](stm: STM[A])(implicit F: Concurrent[F], CS: ContextShift[F]): F[A] =
+    def apply[A](stm: STM[A])(implicit F: Async[F]): F[A] =
       for {
         //TODO this shouldn't need to be a critical section
         e <- criticalSection[F](eval(stm))
@@ -187,14 +172,12 @@ object STM {
       new CriticialSectionPartiallyApplied[F]
 
     class CriticialSectionPartiallyApplied[F[_]]() {
-      def apply[A](a: => A)(implicit F: Concurrent[F], CS: ContextShift[F]): F[A] =
-        blocker.blockOn(
-          F.delay {
-            STM.synchronized {
-              a
-            }
+      def apply[A](a: => A)(implicit F: Async[F]): F[A] =
+        F.blocking {
+          STM.synchronized {
+            a
           }
-        )
+        }
     }
 
     val IdGen = new AtomicLong()
@@ -222,8 +205,7 @@ object STM {
       val stm: STM[Result]
       val txId: TxId
       var tvars: Set[TVar[_]] = Set.empty
-      implicit def F: Concurrent[Effect]
-      implicit def CS: ContextShift[Effect]
+      implicit def F: Async[Effect]
 
       def run: Effect[Unit] =
         for {
@@ -251,7 +233,9 @@ object STM {
               } yield ()
             case TFailure(e) =>
               for {
-                dirty <- criticalSection[Effect](log.isDirty)
+                dirty <- criticalSection[Effect] {
+                  log.isDirty
+                }
                 res   <- if (dirty) run else defer.complete(Left(e))
               } yield res
             case TRetry =>
@@ -273,8 +257,7 @@ object STM {
       type Aux[F[_], A] = RetryFiber { type Effect[X] = F[X]; type Result = A }
 
       def make[F[_], A](stm0: STM[A], txId0: TxId, defer0: Deferred[F, Either[Throwable, A]])(implicit
-        F0: Concurrent[F],
-        CS0: ContextShift[F]
+        F0: Async[F],
       ): RetryFiber.Aux[F, A] =
         new RetryFiber {
           type Effect[X] = F[X]
@@ -283,8 +266,7 @@ object STM {
           val defer: Deferred[F, Either[Throwable, A]] = defer0
           val stm: STM[A]                              = stm0
           val txId                                     = txId0
-          implicit def F: Concurrent[F]                = F0
-          implicit def CS: ContextShift[F]             = CS0
+          implicit def F: Async[F]                = F0
         }
     }
 
